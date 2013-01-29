@@ -85,7 +85,9 @@
 ;; for now, you must launch it yourself
 (defun lein-launch ()
   (interactive)
-  (let ((process (start-process-shell-command
+  (let* ((default-directory lein-home)
+         ;; TODO: use eshell-environment-variables?
+         (process (start-process-shell-command
                   "lein-server" lein-server-buffer
                   (lein-launch-command))))
     (set-process-filter process 'lein-server-filter)
@@ -98,11 +100,13 @@
     (insert output))
   (when (string-match "nREPL server started on port \\([0-9]+\\)" output)
     (let ((port (string-to-number (match-string 1 output)))
-          (nrepl-connection-buffer lein-nrepl-connection-buffer))
-      ;; (flet nrepl-init-client-sessions
-      ;;   nil as second nrepl-new-session-handler arg
-      ;;   )
-      (nrepl-connect "localhost" port))))
+          (nrepl-connection-buffer lein-nrepl-connection-buffer)
+          (nrepl-words-of-inspiration lein-words-of-inspiration))
+      (flet ((nrepl-init-client-sessions
+              (process)
+              (nrepl-create-client-session
+               (nrepl-new-session-handler process))))
+        (nrepl-connect "localhost" port)))))
 
 (defun lein-server-sentinel (process event)
   (let* ((b (process-buffer process))
