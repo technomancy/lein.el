@@ -40,10 +40,32 @@
 
 (require 'nrepl)
 
-;; TODO: allow lein.el nrepl connection to co-exist with project connection
 (defvar lein-nrepl-connection-buffer "*lein-nrepl-connection*")
 
-(defvar lein-nrepl-session nil)
+(defvar lein-server-buffer "*lein server*")
+
+(defcustom lein-home (expand-file-name "~/.lein") "Leiningen home directory.")
+
+(defcustom lein-version "2.0.0" "Version of Leiningen to use.")
+
+(defcustom lein-java-command (or (getenv "LEIN_JAVA_CMD")
+                                 (getenv "JAVA_CMD")
+                                 "java")
+  "Java executable to use to launch Leiningen.")
+
+(defcustom lein-jvm-opts (or (getenv "LEIN_JVM_OPTS") "-Xms64m -Xmx512m")
+  "Extra arguments to the java command to launch Leiningen.")
+
+(defun lein-launch-command ()
+  (let ((lein-jar (format "%s/self-installs/leiningen-%s-standalone.jar"
+                          lein-home lein-version)))
+    (concat "LEIN_VERSION=" lein-version " "
+            lein-java-command " -client -XX:+TieredCompilation"
+            " -Xbootclasspath/a:" lein-jar lein-jvm-opts
+            " -Dfile.encoding=UTF-8 -Dmaven.wagon.http.ssl.easy=false"
+            " -Dleiningen.original.pwd=" default-directory
+            " -classpath " lein-jar " clojure.main -m"
+            " leiningen.core.main repl :headless :port")))
 
 (defun lein-project-root (&optional file)
   (locate-dominating-file (or file default-directory) "project.clj"))
@@ -60,44 +82,50 @@
                         (clj-stacktrace.repl/pst e)))))"
           task (expand-file-name "project.clj" root) (or args [])))
 
-(defun lein-output-handler (buffer string)
-  (with-current-buffer (get-buffer-create buffer)
-    (delete-region (point-min) (point-max))
-    (insert string)
-    (display-buffer buffer)
-    (nrepl-show-maximum-output)
-    (define-key (kbd "q") 'bury-buffer)
-    (setq buffer-read-only t)))
+;; for now, you must launch it yourself
+(defun lein-launch ()
+  (interactive)
+  (let ((process (start-process-shell-command
+                  "lein-server" lein-server-buffer
+                  (lein-launch-command))))
+    (set-process-filter process 'lein-server-filter)
+    (set-process-sentinel process 'lein-server-sentinel)
+    (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
+    (message "Starting Leiningen...")))
 
-(defun lein-make-handler (buffer)
-  (nrepl-make-response-handler buffer nil
-                               'lein-output-handler 'lein-output-handler nil))
+(defun lein-server-filter (process output)
+  (with-current-buffer (process-buffer process)
+    (insert output))
+  (when (string-match "nREPL server started on port \\([0-9]+\\)" output)
+    (let ((port (string-to-number (match-string 1 output)))
+          (nrepl-connection-buffer lein-nrepl-connection-buffer))
+      ;; (flet nrepl-init-client-sessions
+      ;;   nil as second nrepl-new-session-handler arg
+      ;;   )
+      (nrepl-connect "localhost" port))))
 
-;; for now, manual connection to running Leiningen process is required.
-(defun lein-launch (project-root)
-  ;; TODO:
-  ;; * check JVM_OPTS
-  ;; * JAVA_CMD, LEIN_JAVA_CMD
-  ;; * allow lein version to be chosen
-  ;; * honor .lein-classpath
-  ;; * 
-  )
-
-(defun lein (command)
-  ;; TODO: completion for commands
-  (interactive "MCommand: ")
-  ;; flet nrepl-current-session?
-  (let ((nrepl-connection-buffer lein-nrepl-connection-buffer))
-    (nrepl-send-string (apply 'lein-command-string
-                              (lein-project-root)
-                              (split-string command-string " "))
-                       (lein-make-handler "*lein-out*"))))
+(defun lein-server-sentinel (process event)
+  (let* ((b (process-buffer process))
+         (problem (if (and b (buffer-live-p b))
+                      (with-current-buffer b
+                        (buffer-substring (point-min) (point-max)))
+                    "")))
+    (when b
+      (kill-buffer b))
+    (cond
+     ((string-match "^killed" event)
+      nil)
+     ((string-match "^hangup" event)
+      (nrepl-quit))
+     (t (error "Could not start Leiningen: %s" problem)))))
 
 (defun eshell/lein (&rest args)
-  (eshell-print (plist-get (nrepl-send-string-sync
-                            (apply 'lein-command-string
-                                   (lein-project-root) args))
-                           :stdout))
+  (let ((nrepl-connection-buffer lein-nrepl-connection-buffer))
+    ;; TODO: make this async ... somehow
+    (eshell-print (plist-get (nrepl-send-string-sync
+                              (apply 'lein-command-string
+                                     (lein-project-root) args))
+                             :stdout)))
   nil)
 
 ;; Local Variables:
