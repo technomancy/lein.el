@@ -1,4 +1,4 @@
-;;; lein.el --- Leiningen interface
+;;; lein.el --- Eshell interface to Leiningen
 
 ;; Copyright © 2013 Phil Hagelberg
 
@@ -6,18 +6,25 @@
 ;; URL: https://github.com/technomancy/lein.el
 ;; Version: 0.1
 ;; Created: 2013-01-26
-;; Keywords: tools
+;; Keywords: tools, convenience
 ;; Package-Requires: ((nrepl "0.1.5"))
 
 ;; This file is NOT part of GNU Emacs.
 
 ;;; Commentary:
 
-
-;;; Install
+;; This provides an eshell interface to the Leiningen project
+;; automation tool for Clojure. (http://leiningen.org) It communicates
+;; over nREPL (https://github.com/kingtim/nrepl.el) to avoid starting
+;; a new process for every command. Note that tasks which call
+;; eval-in-project will still start a project JVM; it's only
+;; Leiningen's own startup time which is avoided.
 
 ;;; Usage
 
+;; Currently you need to launch Leiningen once per Emacs instance with
+;; M-x lein-launch. Then start eshell with M-x eshell and use
+;; Leiningen as you would normally.
 
 ;;; License:
 
@@ -42,11 +49,13 @@
 
 (defvar lein-nrepl-connection-buffer "*lein-nrepl-connection*")
 
-(defvar lein-server-buffer "*lein server*")
+(defvar lein-server-buffer "*lein-server*")
 
 (defcustom lein-home (expand-file-name "~/.lein") "Leiningen home directory.")
 
-(defcustom lein-version "2.0.0" "Version of Leiningen to use.")
+(defcustom lein-version "2.0.0"
+  "Version of Leiningen to use. Note that changing this
+  arbitrarily will not always work.")
 
 (defcustom lein-java-command (or (getenv "LEIN_JAVA_CMD")
                                  (getenv "JAVA_CMD")
@@ -56,6 +65,12 @@
 (defcustom lein-jvm-opts (or (getenv "LEIN_JVM_OPTS") "-Xms64m -Xmx512m")
   "Extra arguments to the java command to launch Leiningen.")
 
+(defvar lein-words-of-inspiration
+  '("Take this project automation tool brother, may it serve you well."))
+
+;; TODO: launch lein process with nohup so it can outlast Emacs
+;; TODO: check for repl-port written to lein-home
+;; TODO: implement self-install
 (defun lein-launch-command ()
   (let ((lein-jar (format "%s/self-installs/leiningen-%s-standalone.jar"
                           lein-home lein-version)))
@@ -71,7 +86,8 @@
   (locate-dominating-file (or file default-directory) "project.clj"))
 
 (defun lein-command-string (root task &rest args)
-  ;; TODO: blacklist trampoline
+  (when (string= "trampoline" task)
+    (error "Cannot trampoline from lein.el."))
   (format "(binding [leiningen.core.main/*exit-process?* false]
                (try (leiningen.core.main/apply-task \"%s\"
                       (leiningen.core.project/read \"%s\") '%s)
@@ -82,7 +98,9 @@
                         (clj-stacktrace.repl/pst e)))))"
           task (expand-file-name "project.clj" root) (or args [])))
 
-;; for now, you must launch it yourself
+(defun lein-launched? ()
+  (process-live-p (get-buffer-process lein-nrepl-connection-buffer)))
+
 (defun lein-launch ()
   (interactive)
   (let* ((default-directory lein-home)
@@ -124,13 +142,19 @@
      (t (error "Could not start Leiningen: %s" problem)))))
 
 (defun eshell/lein (&rest args)
-  (let ((nrepl-connection-buffer lein-nrepl-connection-buffer))
-    ;; TODO: make this async ... somehow
-    (eshell-print (plist-get (nrepl-send-string-sync
-                              (apply 'lein-command-string
-                                     (lein-project-root) args))
-                             :stdout)))
-  nil)
+  (if (lein-launched?)
+      (let ((nrepl-connection-buffer lein-nrepl-connection-buffer))
+        ;; TODO: make this async, see eshell-gather-process-output
+        (eshell-print (plist-get (nrepl-send-string-sync
+                                  (apply 'lein-command-string
+                                         (lein-project-root) args))
+                                 :stdout))
+        nil)
+    (lein-launch) ; TODO: callback to execute command instead of manual retry
+    "Launching Leiningen; wait till it's up and try your command again."))
+
+;; TODO: port from pcmpl-lein.el
+(defun pcomplete/lein ())
 
 ;; Local Variables:
 ;; byte-compile-warnings: (not cl-functions)
