@@ -99,7 +99,8 @@
           task (expand-file-name "project.clj" root) (or args [])))
 
 (defun lein-launched? ()
-  (process-live-p (get-buffer-process lein-nrepl-connection-buffer)))
+  (and (get-buffer-process lein-nrepl-connection-buffer)
+       (process-live-p (get-buffer-process lein-nrepl-connection-buffer))))
 
 (defun lein-launch ()
   (interactive)
