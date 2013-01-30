@@ -139,14 +139,38 @@
           ((string-match "^hangup" event) (nrepl-quit))
           (t (error "Could not start Leiningen: %s" (or problem ""))))))
 
+(defun lein-handler (task-complete? buffer response)
+  (let ((out (cdr (assoc "out" response)))
+        (err (cdr (assoc "err" response)))
+        (status (cdr (assoc "status" response))))
+    (when out
+      (with-current-buffer buffer
+        (eshell-output-filter nil out)))
+    (when err
+      (with-current-buffer buffer
+        (eshell-output-filter nil err)))
+    (when (member "eval-error" status)
+      (nrepl-dbind-response response (value ns out err status id ex root-ex
+                                            session)
+        (funcall nrepl-err-handler buffer ex root-ex session)))
+    (when (or (member "done" status)
+              (member "eval-error" status))
+      (setf (car task-complete?) t)
+      (eshell-remove-process-entry entry))))
+
 (defun eshell/lein (&rest args)
   (if (lein-launched?)
-      (let ((nrepl-connection-buffer lein-nrepl-connection-buffer))
-        ;; TODO: make this async, see eshell-gather-process-output
-        (plist-get (nrepl-send-string-sync
-                    (apply 'lein-command-string
-                           (lein-project-root) args))
-                   :stdout))
+      (let ((nrepl-connection-buffer lein-nrepl-connection-buffer)
+            ;; woo promises for dummies
+            (task-complete? (list nil)))
+        (nrepl-send-string (apply 'lein-command-string
+                                  (lein-project-root) args)
+                           (apply-partially 'lein-handler
+                                            task-complete?
+                                            (current-buffer)))
+        (while (not (car task-complete?))
+          (sit-for eshell-process-wait-seconds
+                   eshell-process-wait-milliseconds)))
     (lein-launch) ; TODO: callback to execute command instead of manual retry
     "Launching Leiningen; wait till it's up and try your command again."))
 
