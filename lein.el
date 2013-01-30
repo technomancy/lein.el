@@ -67,7 +67,7 @@
   "Extra arguments to the java command to launch Leiningen.")
 
 (defvar lein-words-of-inspiration
-  '("Take this project automation tool brother, may it serve you well."))
+  '("Take this project automation tool brother; may it serve you well."))
 
 ;; TODO: launch lein process with nohup so it can outlast Emacs
 ;; TODO: check for repl-port written to lein-home
@@ -81,7 +81,7 @@
             " -Dfile.encoding=UTF-8 -Dmaven.wagon.http.ssl.easy=false"
             " -Dleiningen.original.pwd=" default-directory
             " -classpath " lein-jar " clojure.main -m"
-            " leiningen.core.main repl :headless :port")))
+            " leiningen.core.main repl :headless")))
 
 (defun lein-project-root (&optional file)
   (locate-dominating-file (or file default-directory) "project.clj"))
@@ -107,7 +107,6 @@
 (defun lein-launch ()
   (interactive)
   (let* ((default-directory lein-home)
-         ;; TODO: use eshell-environment-variables?
          (process (start-process-shell-command
                   "lein-server" lein-server-buffer
                   (lein-launch-command))))
@@ -131,28 +130,23 @@
 
 (defun lein-server-sentinel (process event)
   (let* ((b (process-buffer process))
-         (problem (if (and b (buffer-live-p b))
-                      (with-current-buffer b
-                        (buffer-substring (point-min) (point-max)))
-                    "")))
+         (problem (and b (buffer-live-p b)
+                       (with-current-buffer b
+                         (buffer-substring (point-min) (point-max))))))
     (when b
       (kill-buffer b))
-    (cond
-     ((string-match "^killed" event)
-      nil)
-     ((string-match "^hangup" event)
-      (nrepl-quit))
-     (t (error "Could not start Leiningen: %s" problem)))))
+    (cond ((string-match "^killed" event) nil)
+          ((string-match "^hangup" event) (nrepl-quit))
+          (t (error "Could not start Leiningen: %s" (or problem ""))))))
 
 (defun eshell/lein (&rest args)
   (if (lein-launched?)
       (let ((nrepl-connection-buffer lein-nrepl-connection-buffer))
         ;; TODO: make this async, see eshell-gather-process-output
-        (eshell-print (plist-get (nrepl-send-string-sync
-                                  (apply 'lein-command-string
-                                         (lein-project-root) args))
-                                 :stdout))
-        nil)
+        (plist-get (nrepl-send-string-sync
+                    (apply 'lein-command-string
+                           (lein-project-root) args))
+                   :stdout))
     (lein-launch) ; TODO: callback to execute command instead of manual retry
     "Launching Leiningen; wait till it's up and try your command again."))
 
