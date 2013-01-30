@@ -45,6 +45,7 @@
 
 ;;; Code:
 
+(require 'cl)
 (require 'nrepl)
 
 (defvar lein-nrepl-connection-buffer "*lein-nrepl-connection*")
@@ -96,7 +97,8 @@
                         (when-not (= \"Suppressed exit\" (.getMessage e))
                           (println (.getMessage e)))
                         (clj-stacktrace.repl/pst e)))))"
-          task (expand-file-name "project.clj" root) (or args [])))
+          task (expand-file-name "project.clj" root)
+          (or (mapcar (apply-partially 'format "\"%s\"") args) [])))
 
 (defun lein-launched? ()
   (and (get-buffer-process lein-nrepl-connection-buffer)
