@@ -69,12 +69,23 @@
 (defvar lein-words-of-inspiration
   '("Take this project automation tool brother; may it serve you well."))
 
+(defvar lein-download-url
+  "https://leiningen.s3.amazonaws.com/downloads/leiningen-%s-standalone.jar")
+
+(defun lein-self-install (lein-jar)
+  (message "Leiningen not found; downloading...")
+  (with-current-buffer (url-retrieve-synchronously
+                        (format lein-download-url lein-version))
+    (write-file lein-jar))
+  (message "...done."))
+
 ;; TODO: launch lein process with nohup so it can outlast Emacs
 ;; TODO: check for repl-port written to lein-home
-;; TODO: implement self-install
 (defun lein-launch-command ()
   (let ((lein-jar (format "%s/self-installs/leiningen-%s-standalone.jar"
                           lein-home lein-version)))
+    (when (not (file-exists-p lein-jar))
+      (lein-self-install lein-jar))
     (concat "LEIN_VERSION=" lein-version " "
             lein-java-command " -client -XX:+TieredCompilation"
             " -Xbootclasspath/a:" lein-jar lein-jvm-opts
