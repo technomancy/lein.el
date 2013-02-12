@@ -120,22 +120,24 @@
     (insert output))
   (when (string-match "nREPL server started on port \\([0-9]+\\)" output)
     (let ((port (string-to-number (match-string 1 output)))
-          (nrepl-words-of-inspiration lein-words-of-inspiration))
-      ;; TODO: this doesn't suppress the repl buffer creation any more
-      (flet ((nrepl-create-nrepl-buffer (process)
-                                        "*nrepl-dummy*"))
-        (let ((nrepl-process (nrepl-connect "localhost" port)))
-          (ignore-errors (kill-buffer "*nrepl-dummy*"))
-          (with-current-buffer (process-buffer process)
-            (setq nrepl-connection-buffer
-                  (buffer-name (process-buffer nrepl-process))
-                  lein-nrepl-connection-buffer
-                  (buffer-name (process-buffer nrepl-process))))
-          (with-current-buffer (process-buffer nrepl-process)
-            (setq nrepl-server-buffer
-                  (buffer-name (process-buffer process))
-                  lein-server-buffer
-                  (buffer-name (process-buffer process)))))))))
+          (nrepl-words-of-inspiration lein-words-of-inspiration)
+          (original-nrepl-connection-list nrepl-connection-list))
+      (let ((nrepl-process (save-window-excursion
+                             (nrepl-connect "localhost" port))))
+        (with-current-buffer (process-buffer process)
+          (setq nrepl-connection-buffer
+                (buffer-name (process-buffer nrepl-process))
+                lein-nrepl-connection-buffer
+                (buffer-name (process-buffer nrepl-process))))
+        (with-current-buffer (process-buffer nrepl-process)
+          (setq nrepl-server-buffer
+                (buffer-name (process-buffer process))
+                lein-server-buffer
+                (buffer-name (process-buffer process))))
+        (bury-buffer (nrepl-current-nrepl-buffer)) ; TODO: this does nothing; ugh
+        (when original-nrepl-connection-list
+          (nrepl-make-repl-connection-default
+           (car original-nrepl-connection-list)))))))
 
 (defun lein-server-sentinel (process event)
   (let* ((b (process-buffer process))
