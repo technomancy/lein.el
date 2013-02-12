@@ -100,16 +100,18 @@
 (defun lein-command-string (root task &rest args)
   (when (string= "trampoline" task)
     (error "Cannot trampoline from lein.el."))
-  (format "(binding [leiningen.core.main/*exit-process?* false]
-               (try (leiningen.core.main/apply-task \"%s\"
-                      (leiningen.core.project/read \"%s\") '%s)
+  (let ((project-clj (expand-file-name "project.clj" root)))
+    (format "(binding [leiningen.core.main/*exit-process?* false]
+               (try (leiningen.core.main/apply-task \"%s\" %s '%s)
                     (catch Exception e
                       (if (:exit-code (ex-data e))
                         (when-not (= \"Suppressed exit\" (.getMessage e))
                           (println (.getMessage e)))
                         (clj-stacktrace.repl/pst e)))))"
-          task (expand-file-name "project.clj" root)
-          (or (mapcar (apply-partially 'format "\"%s\"") args) [])))
+            task (if (file-exists-p project-clj)
+                     (format "(leiningen.core.project/read \"%s\")" project-clj)
+                   "nil")
+                (or (mapcar (apply-partially 'format "\"%s\"") args) []))))
 
 (defun lein-launched? ()
   (and (get-buffer-process lein-nrepl-connection-buffer)
