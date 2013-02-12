@@ -7,7 +7,7 @@
 ;; Version: 0.1
 ;; Created: 2013-01-26
 ;; Keywords: tools, convenience
-;; Package-Requires: ((nrepl "0.1.5"))
+;; Package-Requires: ((nrepl "0.1.7"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -120,13 +120,22 @@
     (insert output))
   (when (string-match "nREPL server started on port \\([0-9]+\\)" output)
     (let ((port (string-to-number (match-string 1 output)))
-          (nrepl-connection-buffer lein-nrepl-connection-buffer)
           (nrepl-words-of-inspiration lein-words-of-inspiration))
-      (flet ((nrepl-init-client-sessions
-              (process)
-              (nrepl-create-client-session
-               (nrepl-new-session-handler process))))
-        (nrepl-connect "localhost" port)))))
+      ;; TODO: this doesn't suppress the repl buffer creation any more
+      (flet ((nrepl-create-nrepl-buffer (process)
+                                        "*nrepl-dummy*"))
+        (let ((nrepl-process (nrepl-connect "localhost" port)))
+          (ignore-errors (kill-buffer "*nrepl-dummy*"))
+          (with-current-buffer (process-buffer process)
+            (setq nrepl-connection-buffer
+                  (buffer-name (process-buffer nrepl-process))
+                  lein-nrepl-connection-buffer
+                  (buffer-name (process-buffer nrepl-process))))
+          (with-current-buffer (process-buffer nrepl-process)
+            (setq nrepl-server-buffer
+                  (buffer-name (process-buffer process))
+                  lein-server-buffer
+                  (buffer-name (process-buffer process)))))))))
 
 (defun lein-server-sentinel (process event)
   (let* ((b (process-buffer process))
