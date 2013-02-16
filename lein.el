@@ -74,27 +74,33 @@
 
 (defun lein-self-install (lein-jar)
   (message "Leiningen not found; downloading...")
-  ;; TODO: make this async
-  (with-current-buffer (url-retrieve-synchronously
-                        (format lein-download-url lein-version))
-    ;; TODO: remove HTTP headers
-    (write-file lein-jar))
-  (message "...done."))
+  (sit-for 1)
+  (url-retrieve
+   (format lein-download-url lein-version)
+   'lein-self-install-callback (list lein-jar)))
+
+(defun lein-self-install-callback (status lein-jar)
+  (search-forward "\n\n")
+  (write-region (point) (point-max) lein-jar)
+  (message "Leiningen download complete. Please retry."))
+
 
 ;; TODO: launch lein process with nohup so it can outlast Emacs
 ;; TODO: check for repl-port written to lein-home
 (defun lein-launch-command ()
   (let ((lein-jar (format "%s/self-installs/leiningen-%s-standalone.jar"
                           lein-home lein-version)))
-    (when (not (file-exists-p lein-jar))
-      (lein-self-install lein-jar))
-    (concat "LEIN_VERSION=" lein-version " "
-            lein-java-command " -client -XX:+TieredCompilation"
-            " -Xbootclasspath/a:" lein-jar lein-jvm-opts
-            " -Dfile.encoding=UTF-8 -Dmaven.wagon.http.ssl.easy=false"
-            " -Dleiningen.original.pwd=" default-directory
-            " -classpath " lein-jar " clojure.main -m"
-            " leiningen.core.main repl :headless")))
+    (if (not (file-exists-p lein-jar))
+        (progn  
+          (lein-self-install lein-jar)
+          nil)
+      (concat "LEIN_VERSION=" lein-version " "
+              lein-java-command " -client -XX:+TieredCompilation"
+              " -Xbootclasspath/a:" lein-jar lein-jvm-opts
+              " -Dfile.encoding=UTF-8 -Dmaven.wagon.http.ssl.easy=false"
+              " -Dleiningen.original.pwd=" default-directory
+              " -classpath " lein-jar " clojure.main -m"
+              " leiningen.core.main repl :headless"))))
 
 (defun lein-project-root (&optional file)
   (locate-dominating-file (or file default-directory) "project.clj"))
@@ -113,7 +119,7 @@
             task (if (file-exists-p project-clj)
                      (format "(leiningen.core.project/read \"%s\")" project-clj)
                    "nil")
-                (or (mapcar (apply-partially 'format "\"%s\"") args) []))))
+            (or (mapcar (apply-partially 'format "\"%s\"") args) []))))
 
 (defun lein-launched? ()
   (and (get-buffer-process lein-nrepl-connection-buffer)
@@ -122,13 +128,15 @@
 (defun lein-launch ()
   (interactive)
   (let* ((default-directory lein-home)
-         (process (start-process-shell-command
-                  "lein-server" lein-server-buffer
-                  (lein-launch-command))))
-    (set-process-filter process 'lein-server-filter)
-    (set-process-sentinel process 'lein-server-sentinel)
-    (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
-    (message "Starting Leiningen...")))
+         (command (lein-launch-command)))
+    (when command
+      (let ((process (start-process-shell-command
+                      "lein-server" lein-server-buffer
+                      command)))
+        (set-process-filter process 'lein-server-filter)
+        (set-process-sentinel process 'lein-server-sentinel)
+        (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
+        (message "Starting Leiningen...")))))
 
 (defun lein-server-filter (process output)
   (with-current-buffer (process-buffer process)
