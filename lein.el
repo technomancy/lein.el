@@ -74,8 +74,10 @@
 
 (defun lein-self-install (lein-jar)
   (message "Leiningen not found; downloading...")
+  ;; TODO: make this async
   (with-current-buffer (url-retrieve-synchronously
                         (format lein-download-url lein-version))
+    ;; TODO: remove HTTP headers
     (write-file lein-jar))
   (message "...done."))
 
