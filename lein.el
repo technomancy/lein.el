@@ -67,7 +67,7 @@
   "Extra arguments to the java command to launch Leiningen.")
 
 (defvar lein-words-of-inspiration
-  '("Take this project automation tool brother; may it serve you well."))
+  '("Take this project automation tool, brother. May it serve you well."))
 
 (defvar lein-download-url
   "https://leiningen.s3.amazonaws.com/downloads/leiningen-%s-standalone.jar")
@@ -96,7 +96,7 @@
           nil)
       (concat "LEIN_VERSION=" lein-version " "
               lein-java-command " -client -XX:+TieredCompilation"
-              " -Xbootclasspath/a:" lein-jar lein-jvm-opts
+              " -Xbootclasspath/a:" lein-jar " " lein-jvm-opts
               " -Dfile.encoding=UTF-8 -Dmaven.wagon.http.ssl.easy=false"
               " -Dleiningen.original.pwd=" default-directory
               " -classpath " lein-jar " clojure.main -m"
@@ -107,7 +107,7 @@
 
 (defun lein-command-string (root task &rest args)
   (when (string= "trampoline" task)
-    (error "Cannot trampoline from lein.el."))
+    (error "Cannot trampoline from lein.el"))
   (let ((project-clj (expand-file-name "project.clj" root)))
     (format "(binding [leiningen.core.main/*exit-process?* false]
                (try (leiningen.core.main/apply-task \"%s\" %s '%s)
@@ -116,9 +116,10 @@
                         (when-not (= \"Suppressed exit\" (.getMessage e))
                           (println (.getMessage e)))
                         (clj-stacktrace.repl/pst e)))))"
-            task (if (file-exists-p project-clj)
-                     (format "(leiningen.core.project/read \"%s\")" project-clj)
-                   "nil")
+            task
+            (if (file-exists-p project-clj)
+                (format "(leiningen.core.project/read \"%s\")" project-clj)
+              "nil")
             (or (mapcar (apply-partially 'format "\"%s\"") args) []))))
 
 (defun lein-launched? ()
@@ -190,7 +191,7 @@
     (when (or (member "done" status)
               (member "eval-error" status))
       (setf (car task-complete?) t)
-      (eshell-remove-process-entry entry))))
+      (eshell-remove-process-entry entry)))) ; FIXME: entry appears to be unbound
 
 (defun eshell/lein (&rest args)
   (if (lein-launched?)
@@ -204,7 +205,7 @@
                                             (current-buffer)))
         (while (not (car task-complete?))
           (sit-for eshell-process-wait-seconds
-                   eshell-process-wait-milliseconds)))
+                   eshell-process-wait-milliseconds))) ; FIXME: this call syntax is wrong
     (lein-launch) ; TODO: callback to execute command instead of manual retry
     "Launching Leiningen; wait till it's up and try your command again."))
 
