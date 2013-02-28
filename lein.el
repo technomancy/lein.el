@@ -9,6 +9,9 @@
 ;; Keywords: tools, convenience
 ;; Package-Requires: ((nrepl "0.1.7"))
 
+;; Additional contributions by:
+;; - Gary W. Johnson (lambdatronic@gmail.com)
+
 ;; This file is NOT part of GNU Emacs.
 
 ;;; Commentary:
@@ -48,9 +51,11 @@
 (require 'cl)
 (require 'nrepl)
 
-(defvar lein-nrepl-connection-buffer "*lein-nrepl-connection*")
-
-(defvar lein-server-buffer "*lein-server*")
+;;==========================================================
+;; Section 1: Formulating the Leiningen launch command
+;; - Construct the java invocation
+;; - Download the leiningen-*-standalone.jar if not present
+;;==========================================================
 
 (defcustom lein-home (expand-file-name "~/.lein") "Leiningen home directory.")
 
@@ -66,24 +71,20 @@
 (defcustom lein-jvm-opts (or (getenv "LEIN_JVM_OPTS") "-Xms64m -Xmx512m")
   "Extra arguments to the java command to launch Leiningen.")
 
-(defvar lein-words-of-inspiration
-  '("Take this project automation tool brother; may it serve you well."))
-
 (defvar lein-download-url
   "https://leiningen.s3.amazonaws.com/downloads/leiningen-%s-standalone.jar")
-
-(defun lein-self-install (lein-jar)
-  (message "Leiningen not found; downloading...")
-  (sit-for 1)
-  (url-retrieve
-   (format lein-download-url lein-version)
-   'lein-self-install-callback (list lein-jar)))
 
 (defun lein-self-install-callback (status lein-jar)
   (search-forward "\n\n")
   (write-region (point) (point-max) lein-jar)
-  (message "Leiningen download complete. Please retry."))
+  (message "Leiningen download complete. Please retry your command."))
 
+(defun lein-self-install (lein-jar)
+  (message "Leiningen not found. Downloading...")
+  (sit-for 1) ;; Why the delay here?
+  (url-retrieve
+   (format lein-download-url lein-version)
+   'lein-self-install-callback (list lein-jar)))
 
 ;; TODO: launch lein process with nohup so it can outlast Emacs
 ;; TODO: check for repl-port written to lein-home
@@ -91,87 +92,142 @@
   (let ((lein-jar (format "%s/self-installs/leiningen-%s-standalone.jar"
                           lein-home lein-version)))
     (if (not (file-exists-p lein-jar))
-        (progn  
-          (lein-self-install lein-jar)
-          nil)
+        (progn (lein-self-install lein-jar) nil)
       (concat "LEIN_VERSION=" lein-version " "
               lein-java-command " -client -XX:+TieredCompilation"
-              " -Xbootclasspath/a:" lein-jar lein-jvm-opts
+              " -Xbootclasspath/a:" lein-jar " " lein-jvm-opts
               " -Dfile.encoding=UTF-8 -Dmaven.wagon.http.ssl.easy=false"
               " -Dleiningen.original.pwd=" default-directory
               " -classpath " lein-jar " clojure.main -m"
               " leiningen.core.main repl :headless"))))
 
+;;==========================================================
+;; Section 2: Formulating the Leiningen task command
+;; - Locate and read in the current project.clj
+;; - Construct the task invocation (in Clojure)
+;; - Throw an error if a trampoline task is encountered
+;;==========================================================
+
 (defun lein-project-root (&optional file)
   (locate-dominating-file (or file default-directory) "project.clj"))
 
-(defun lein-command-string (root task &rest args)
-  (when (string= "trampoline" task)
-    (error "Cannot trampoline from lein.el."))
-  (let ((project-clj (expand-file-name "project.clj" root)))
-    (format "(binding [leiningen.core.main/*exit-process?* false]
-               (try (leiningen.core.main/apply-task \"%s\" %s '%s)
-                    (catch Exception e
-                      (if (:exit-code (ex-data e))
-                        (when-not (= \"Suppressed exit\" (.getMessage e))
-                          (println (.getMessage e)))
-                        (clj-stacktrace.repl/pst e)))))"
-            task (if (file-exists-p project-clj)
-                     (format "(leiningen.core.project/read \"%s\")" project-clj)
-                   "nil")
-            (or (mapcar (apply-partially 'format "\"%s\"") args) []))))
+(defun lein-task-command (task &rest args)
+  (if (string= "trampoline" task)
+      (error "Cannot trampoline from lein.el")
+    (let* ((project-clj (expand-file-name "project.clj" (lein-project-root)))
+           (project-rdr (if (file-exists-p project-clj)
+                            (format "(leiningen.core.project/read \"%s\")" project-clj)
+                          "nil"))
+           (string-args (or (mapcar (apply-partially 'format "\"%s\"") args) [])))
+      (format "(binding [leiningen.core.main/*exit-process?* false]
+                 (try (leiningen.core.main/apply-task \"%s\" %s '%s)
+                      (catch Exception e
+                        (if (:exit-code (ex-data e))
+                          (when-not (= \"Suppressed exit\" (.getMessage e))
+                            (println (.getMessage e)))
+                          (clj-stacktrace.repl/pst e)))))"
+              task project-rdr string-args))))
+
+;;==========================================================
+;; Section 3: Launching Leiningen in the background
+;; - If no leiningen-*-standalone.jar, install it and exit
+;; - Otherwise, run the lein-launch-command asynchronously
+;;   and direct its output to lein-server-buffer
+;; - Use lein-server-filter to filter its output
+;; - Use lein-server-sentinel to handle signals sent to it
+;; - Set process-coding-system to utf-8-unix
+;;==========================================================
+
+(defvar lein-server-buffer "*lein-server*")
+
+(defvar lein-nrepl-connection-buffer "*lein-nrepl-connection*")
+
+(defvar lein-words-of-inspiration
+  '("Take this project automation tool, brother.  May it serve you well."))
+
+(defun lein-server-filter (process output)
+  (when (buffer-live-p (process-buffer process))
+    (with-current-buffer (process-buffer process)
+      (save-excursion
+        ;; Insert output and advance process-mark
+        (goto-char (process-mark process))
+        (insert output)
+        (set-marker (process-mark process) (point))
+        ;; Search buffer for nREPL server port
+        (unless (process-get process :lein-nrepl-server-port)
+          (goto-char (point-min))
+          (when (re-search-forward "nREPL server started on port \\([0-9]+\\)\n" nil t)
+            (process-put process :lein-nrepl-server-port (string-to-number (match-string 1)))
+            ;; Connect to the local nREPL server
+            (let* ((nrepl-words-of-inspiration lein-words-of-inspiration)
+                   (original-nrepl-connection-list nrepl-connection-list)
+                   (nrepl-process (nrepl-connect "localhost"
+                                                 (process-get process
+                                                              :lein-nrepl-server-port))))
+              ;; Set some definitions local to the lein-server buffer:
+              ;; - nrepl-connection-buffer = name of buffer associated with nrepl-client process
+              ;; - lein-nrepl-connection-buffer = name of buffer associated with nrepl-client process
+              (with-current-buffer (process-buffer process)
+                (setq nrepl-connection-buffer
+                      (buffer-name (process-buffer nrepl-process))
+                      lein-nrepl-connection-buffer
+                      (buffer-name (process-buffer nrepl-process))))
+              ;; Set some definitions local to the nrepl-client buffer:
+              ;; - nrepl-server-buffer = name of buffer associated with lein-server process (*lein-server*)
+              ;; - lein-server-buffer = name of buffer associated with lein-server process (*lein-server*)
+              (with-current-buffer (process-buffer nrepl-process)
+                (setq nrepl-server-buffer
+                      (buffer-name (process-buffer process))
+                      lein-server-buffer
+                      (buffer-name (process-buffer process))))
+              ;; Wait for the *nrepl* buffer to pop up, and hide it immediately
+              (let ((max-time-remaining 4000)) ;; 4 seconds
+                (while (and (not (nrepl-current-nrepl-buffer))
+                            (> max-time-remaining 0))
+                  (sit-for 0 100)
+                  (decf max-time-remaining 100)))
+              (if (nrepl-current-nrepl-buffer)
+                  (delete-windows-on (nrepl-current-nrepl-buffer)))
+              ;; Restore original-nrepl-connect-list
+              (when original-nrepl-connection-list
+                (nrepl-make-repl-connection-default
+                 (car original-nrepl-connection-list))))))))))
+
+(defun lein-server-sentinel (process event)
+  (when (buffer-live-p (process-buffer process))
+    (let* ((buf (process-buffer process))
+           (problem (with-current-buffer buf (buffer-string))))
+      (when buf
+        (kill-buffer buf))
+      (cond ((string-match "^killed" event) nil)
+            ((string-match "^hangup" event) (nrepl-quit))
+            (t (error "Could not start Leiningen: %s" (or problem "")))))))
+
+(defun lein-launch ()
+  (interactive)
+  (let ((command (lein-launch-command)))
+    (when command
+      (let* ((default-directory lein-home)
+             (process (start-process-shell-command
+                       "lein-server" lein-server-buffer
+                       command)))
+        (set-process-filter process 'lein-server-filter)
+        (set-process-sentinel process 'lein-server-sentinel)
+        (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
+        (message "Starting Leiningen...")
+        nil)))) ;; Suppress eshell output
+
+;;==========================================================
+;; Section 4: Eshell interface
+;; - Launch Leiningen if not already running
+;; - Otherwise, send the Leiningen task command to nREPL
+;;   and register lein-handler as the callback function
+;; - Then sit and wait until lein-handler is finished
+;;==========================================================
 
 (defun lein-launched? ()
   (and (get-buffer-process lein-nrepl-connection-buffer)
        (process-live-p (get-buffer-process lein-nrepl-connection-buffer))))
-
-(defun lein-launch ()
-  (interactive)
-  (let* ((default-directory lein-home)
-         (command (lein-launch-command)))
-    (when command
-      (let ((process (start-process-shell-command
-                      "lein-server" lein-server-buffer
-                      command)))
-        (set-process-filter process 'lein-server-filter)
-        (set-process-sentinel process 'lein-server-sentinel)
-        (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
-        (message "Starting Leiningen...")))))
-
-(defun lein-server-filter (process output)
-  (with-current-buffer (process-buffer process)
-    (insert output))
-  (when (string-match "nREPL server started on port \\([0-9]+\\)" output)
-    (let ((port (string-to-number (match-string 1 output)))
-          (nrepl-words-of-inspiration lein-words-of-inspiration)
-          (original-nrepl-connection-list nrepl-connection-list))
-      (let ((nrepl-process (save-window-excursion
-                             (nrepl-connect "localhost" port))))
-        (with-current-buffer (process-buffer process)
-          (setq nrepl-connection-buffer
-                (buffer-name (process-buffer nrepl-process))
-                lein-nrepl-connection-buffer
-                (buffer-name (process-buffer nrepl-process))))
-        (with-current-buffer (process-buffer nrepl-process)
-          (setq nrepl-server-buffer
-                (buffer-name (process-buffer process))
-                lein-server-buffer
-                (buffer-name (process-buffer process))))
-        (bury-buffer (nrepl-current-nrepl-buffer)) ; TODO: this does nothing; ugh
-        (when original-nrepl-connection-list
-          (nrepl-make-repl-connection-default
-           (car original-nrepl-connection-list)))))))
-
-(defun lein-server-sentinel (process event)
-  (let* ((b (process-buffer process))
-         (problem (and b (buffer-live-p b)
-                       (with-current-buffer b
-                         (buffer-substring (point-min) (point-max))))))
-    (when b
-      (kill-buffer b))
-    (cond ((string-match "^killed" event) nil)
-          ((string-match "^hangup" event) (nrepl-quit))
-          (t (error "Could not start Leiningen: %s" (or problem ""))))))
 
 (defun lein-handler (task-complete? buffer response)
   (let ((out (cdr (assoc "out" response)))
@@ -189,16 +245,15 @@
         (funcall nrepl-err-handler buffer ex root-ex session)))
     (when (or (member "done" status)
               (member "eval-error" status))
-      (setf (car task-complete?) t)
-      (eshell-remove-process-entry entry))))
+      (setf (car task-complete?) t))))
+      ;; (eshell-remove-process-entry entry)))) ; FIXME: entry appears to be unbound
 
 (defun eshell/lein (&rest args)
   (if (lein-launched?)
       (let ((nrepl-connection-buffer lein-nrepl-connection-buffer)
             ;; woo promises for dummies
             (task-complete? (list nil)))
-        (nrepl-send-string (apply 'lein-command-string
-                                  (lein-project-root) args)
+        (nrepl-send-string (apply 'lein-task-command (or args '("help")))
                            (apply-partially 'lein-handler
                                             task-complete?
                                             (current-buffer)))
@@ -206,7 +261,7 @@
           (sit-for eshell-process-wait-seconds
                    eshell-process-wait-milliseconds)))
     (lein-launch) ; TODO: callback to execute command instead of manual retry
-    "Launching Leiningen; wait till it's up and try your command again."))
+    "Launching Leiningen. Wait till it's up, and try your command again."))
 
 ;; TODO: port from pcmpl-lein.el
 (defun pcomplete/lein ())
