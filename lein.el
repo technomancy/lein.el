@@ -7,7 +7,7 @@
 ;; Version: 0.1
 ;; Created: 2013-01-26
 ;; Keywords: tools, convenience
-;; Package-Requires: ((nrepl "0.1.7"))
+;; Package-Requires: ((cider "0.1.7"))
 
 ;; Additional contributions by:
 ;; - Gary W. Johnson (lambdatronic@gmail.com)
@@ -49,7 +49,7 @@
 ;;; Code:
 
 (require 'cl)
-(require 'nrepl)
+(require 'nrepl-client)
 
 ;;==========================================================
 ;; Section 1: Formulating the Leiningen launch command
