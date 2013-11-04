@@ -49,6 +49,7 @@
 ;;; Code:
 
 (require 'cl)
+(require 'cider)
 (require 'nrepl-client)
 
 ;;==========================================================
@@ -159,7 +160,7 @@
           (when (re-search-forward "nREPL server started on port \\([0-9]+\\)\n" nil t)
             (process-put process :lein-nrepl-server-port (string-to-number (match-string 1)))
             ;; Connect to the local nREPL server
-            (let* ((nrepl-words-of-inspiration lein-words-of-inspiration)
+            (let* ((cider-words-of-inspiration lein-words-of-inspiration)
                    (original-nrepl-connection-list nrepl-connection-list)
                    (nrepl-process (nrepl-connect "localhost"
                                                  (process-get process
@@ -182,12 +183,12 @@
                       (buffer-name (process-buffer process))))
               ;; Wait for the *nrepl* buffer to pop up, and hide it immediately
               (let ((max-time-remaining 4000)) ;; 4 seconds
-                (while (and (not (nrepl-current-nrepl-buffer))
+                (while (and (not (nrepl-current-repl-buffer))
                             (> max-time-remaining 0))
                   (sit-for 0 100)
                   (decf max-time-remaining 100)))
-              (if (nrepl-current-nrepl-buffer)
-                  (delete-windows-on (nrepl-current-nrepl-buffer)))
+              (if (nrepl-current-repl-buffer)
+                  (delete-windows-on (nrepl-current-repl-buffer)))
               ;; Restore original-nrepl-connect-list
               (when original-nrepl-connection-list
                 (nrepl-make-repl-connection-default
@@ -200,7 +201,7 @@
       (when buf
         (kill-buffer buf))
       (cond ((string-match "^killed" event) nil)
-            ((string-match "^hangup" event) (nrepl-quit))
+            ((string-match "^hangup" event) (cider-quit))
             (t (error "Could not start Leiningen: %s" (or problem "")))))))
 
 (defun lein-launch ()
